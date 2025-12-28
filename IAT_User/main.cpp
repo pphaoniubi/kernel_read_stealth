@@ -34,40 +34,19 @@ typedef INT64(__fastcall* fNtGdiEllipse)(ULONG64);
 HMODULE user32 = LoadLibraryA("user32.dll");
 HMODULE win32u = LoadLibraryA("win32u.dll");
 
-fNtGdiEllipse NtGdiEllipse;
+fNtGdiEllipse NtGdiEllipse = (fNtGdiEllipse)GetProcAddress
+(GetModuleHandleA("win32u.dll"), "NtGdiEllipse");;
 
 
 namespace driver {
 
-    /*bool attach_process(const DWORD pid) {
-
-
-        NtGdiEllipse = (fNtGdiEllipse)GetProcAddress(GetModuleHandleA("win32u.dll"), "NtGdiEllipse");
-
-        if (!NtGdiEllipse)
-            return -1;
-
-        INFORMATION info{};
-
-        info.key = SPECIAL_CALL;
-        info.operation = 0;
-        info.process_id = (HANDLE)(ULONG_PTR)pid;
-
-        NtGdiEllipse((ULONG64)&info);
-        
-
-		return true;
-	}
-    */
 
     template <class T>
     T read_memory(const std::uintptr_t addr, const HANDLE pid) {
         T temp = {};
 
-        NtGdiEllipse = (fNtGdiEllipse)GetProcAddress
-        (GetModuleHandleA("win32u.dll"), "NtUserUpdateDefaultDesktopThumbnail");
 
-        if (!NtGdiEllipse) 
+        if (!NtGdiEllipse)
             return {};
 
 
@@ -100,7 +79,6 @@ namespace driver {
             pid
         );
 
-        // Dereference all offsets EXCEPT the last one
         for (size_t i = 0; i < offsets.size() - 1; ++i)
         {
             current = read_memory<std::uintptr_t>(
@@ -214,252 +192,235 @@ int main() {
     }
 
 
-    //if (driver::attach_process(pid)) {
-        //std::cout << "Attached to process successfully.\n"<<std::endl;
+    WNDCLASSEX wc = {
+        sizeof(WNDCLASSEX),
+        CS_CLASSDC,
+        WndProc,
+        0L, 0L,
+        GetModuleHandle(NULL),
+        NULL, NULL, NULL, NULL,
+        _T("ImGuiWindow"),
+        NULL
+    };
+
+    RegisterClassEx(&wc);
+
+    HWND hwnd = CreateWindow(
+        wc.lpszClassName,
+        _T("ImGui DX11"),
+        WS_POPUP,
+        100, 100, 1280, 800,
+        NULL, NULL,
+        wc.hInstance,
+        NULL
+    );
+
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(hwnd);
+
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount = 2;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hwnd;
+    sd.SampleDesc.Count = 1;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        D3D11_SDK_VERSION,
+        &sd,
+        &gSwapChain,
+        &gDevice,
+        nullptr,
+        &gContext
+    );
+
+    if (FAILED(hr))
+    {
+        MessageBoxA(nullptr, "DX11 init failed", "Error", MB_OK);
+        return 0;
+    }
+
+    // Create render target
+    ID3D11Texture2D* backBuffer = nullptr;
+    gSwapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+    gDevice->CreateRenderTargetView(backBuffer, nullptr, &gRTV);
+    backBuffer->Release();
 
 
-            // START DRAWING
+    // ---- AFTER DX11 DEVICE IS CREATED ---- IMGUI setup
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
 
-            WNDCLASSEX wc = {
-                sizeof(WNDCLASSEX),
-                CS_CLASSDC,
-                WndProc,
-                0L, 0L,
-                GetModuleHandle(NULL),
-                NULL, NULL, NULL, NULL,
-                _T("ImGuiWindow"),
-                NULL
-            };
+    // Initialize backends
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(gDevice, gContext);
 
-            RegisterClassEx(&wc);
 
-            HWND hwnd = CreateWindow(
-                wc.lpszClassName,
-                _T("ImGui DX11"),
-                WS_POPUP,
-                100, 100, 1280, 800,
-                NULL, NULL,
-                wc.hInstance,
-                NULL
+    LONG ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+    SetWindowLong(hwnd, GWL_EXSTYLE,
+        ex | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+    );
+
+    SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
+    SetProcessDpiAwarenessContext(
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    );
+
+    MARGINS margins = { -1 };
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+    HWND target = FindWindowByPID(pid);
+
+    if (!target) {
+        std::cout << "cannot find FPS Chess window" << std::endl;
+    }
+
+    // GOD CODE
+    static int lastW = 0, lastH = 0;
+
+    MSG msg = {};
+    while (msg.message != WM_QUIT)
+    {
+        while (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        if (!target)
+            continue;
+
+
+        RECT client;
+        GetClientRect(target, &client);
+
+        POINT topLeft = { client.left, client.top };
+        ClientToScreen(target, &topLeft);
+
+        int width = client.right - client.left;
+        int height = client.bottom - client.top;
+
+        if (width == 0 || height == 0)
+            continue;
+
+
+
+        // GOD CODE
+
+        if (width != lastW || height != lastH)
+        {
+            ImGui_ImplDX11_InvalidateDeviceObjects();
+
+            gContext->OMSetRenderTargets(0, nullptr, nullptr);
+            gRTV->Release();
+
+            gSwapChain->ResizeBuffers(
+                0,
+                width,
+                height,
+                DXGI_FORMAT_UNKNOWN,
+                0
             );
 
-            ShowWindow(hwnd, SW_SHOWDEFAULT);
-            UpdateWindow(hwnd);
-
-            DXGI_SWAP_CHAIN_DESC sd{};
-            sd.BufferCount = 2;
-            sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            sd.OutputWindow = hwnd;
-            sd.SampleDesc.Count = 1;
-            sd.Windowed = TRUE;
-            sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
-            HRESULT hr = D3D11CreateDeviceAndSwapChain(
-                nullptr,
-                D3D_DRIVER_TYPE_HARDWARE,
-                nullptr,
-                0,
-                nullptr,
-                0,
-                D3D11_SDK_VERSION,
-                &sd,
-                &gSwapChain,
-                &gDevice,
-                nullptr,
-                &gContext
-            );
-
-            if (FAILED(hr))
-            {
-                MessageBoxA(nullptr, "DX11 init failed", "Error", MB_OK);
-                return 0;
-            }
-
-            // Create render target
             ID3D11Texture2D* backBuffer = nullptr;
             gSwapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
             gDevice->CreateRenderTargetView(backBuffer, nullptr, &gRTV);
             backBuffer->Release();
 
+            // THIS WAS MISSING
+            D3D11_VIEWPORT vp = {};
+            vp.Width = (FLOAT)width;
+            vp.Height = (FLOAT)height;
+            vp.MinDepth = 0.0f;
+            vp.MaxDepth = 1.0f;
+            gContext->RSSetViewports(1, &vp);
 
-            // ---- AFTER DX11 DEVICE IS CREATED ---- IMGUI setup
-            IMGUI_CHECKVERSION();
-            ImGui::CreateContext();
-            ImGuiIO& io = ImGui::GetIO(); (void)io;
+            ImGui_ImplDX11_CreateDeviceObjects();
 
-            // Initialize backends
-            ImGui_ImplWin32_Init(hwnd);
-            ImGui_ImplDX11_Init(gDevice, gContext);
+            lastW = width;
+            lastH = height;
+        }
+        // GOD CODE
 
 
-            LONG ex = GetWindowLong(hwnd, GWL_EXSTYLE);
-            SetWindowLong(hwnd, GWL_EXSTYLE,
-                ex | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            topLeft.x,
+            topLeft.y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW
+        );
+
+
+        // ================== IMGUI FRAME ==================
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        // ---- DRAW DOT HERE ----
+        ImGui::GetForegroundDrawList()->AddText(
+            ImGui::GetFont(),          // current font
+            ImGui::GetFontSize() * 4.0f, // scale factor (2.0 = 2x bigger)
+            ImVec2(60.0f, 60.0f),
+            IM_COL32(255, 0, 0, 255),
+            "Overlay"
+        );
+
+
+        std::cout << "width center: " << width/2 << ", height center: " << height/2 << std::endl << std::endl;
+               
+        //uintptr_t mod_base = driver::read_memory<uintptr_t>(get_module_base(pid, L"Notepad.exe"), (HANDLE)pid);
+
+        FVector2D screen = get_screen_pos(pid, width, height);
+
+
+        if (screen.X != 0 && screen.Y != 0) {
+
+            ImGui::GetForegroundDrawList()->AddRect(
+                ImVec2(screen.X - 30, screen.Y - 50),
+                ImVec2(screen.X + 30, screen.Y + 50),
+                IM_COL32(255, 0, 0, 255),
+                0.0f,
+                0,
+                2.0f 
             );
 
-            SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
-            SetProcessDpiAwarenessContext(
-                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-            );
-
-            MARGINS margins = { -1 };
-            DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-            HWND target = FindWindowByPID(pid);
-
-            if (!target) {
-                std::cout << "cannot find FPS Chess window" << std::endl;
-            }
-
-            // GOD CODE
-            static int lastW = 0, lastH = 0;
-
-            MSG msg = {};
-            while (msg.message != WM_QUIT)
-            {
-                while (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
-                {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                }
-
-                if (!target)
-                    continue;
-
-
-                RECT client;
-                GetClientRect(target, &client);
-
-                POINT topLeft = { client.left, client.top };
-                ClientToScreen(target, &topLeft);
-
-                int width = client.right - client.left;
-                int height = client.bottom - client.top;
-
-                if (width == 0 || height == 0)
-                    continue;
-
-
-
-                // GOD CODE
-
-                if (width != lastW || height != lastH)
-                {
-                    ImGui_ImplDX11_InvalidateDeviceObjects();
-
-                    gContext->OMSetRenderTargets(0, nullptr, nullptr);
-                    gRTV->Release();
-
-                    gSwapChain->ResizeBuffers(
-                        0,
-                        width,
-                        height,
-                        DXGI_FORMAT_UNKNOWN,
-                        0
-                    );
-
-                    ID3D11Texture2D* backBuffer = nullptr;
-                    gSwapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-                    gDevice->CreateRenderTargetView(backBuffer, nullptr, &gRTV);
-                    backBuffer->Release();
-
-                    // THIS WAS MISSING
-                    D3D11_VIEWPORT vp = {};
-                    vp.Width = (FLOAT)width;
-                    vp.Height = (FLOAT)height;
-                    vp.MinDepth = 0.0f;
-                    vp.MaxDepth = 1.0f;
-                    gContext->RSSetViewports(1, &vp);
-
-                    ImGui_ImplDX11_CreateDeviceObjects();
-
-                    lastW = width;
-                    lastH = height;
-                }
-                // GOD CODE
-
-
-
-                SetWindowPos(
-                    hwnd,
-                    HWND_TOPMOST,
-                    topLeft.x,
-                    topLeft.y,
+            if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
+                SendInputAimbot(
                     width,
                     height,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    screen.X,
+                    screen.Y
                 );
+			}
 
+        }
+        // -----------------------
 
-                // ================== IMGUI FRAME ==================
-                ImGui_ImplDX11_NewFrame();
-                ImGui_ImplWin32_NewFrame();
-                ImGui::NewFrame();
+        ImGui::Render();
 
-                // ---- DRAW DOT HERE ----
-                ImGui::GetForegroundDrawList()->AddText(
-                    ImGui::GetFont(),          // current font
-                    ImGui::GetFontSize() * 4.0f, // scale factor (2.0 = 2x bigger)
-                    ImVec2(60.0f, 60.0f),
-                    IM_COL32(255, 0, 0, 255),
-                    "Overlay"
-                );
+        // ================== DX11 RENDER ==================
+        float clearColor[4] = { 0.f, 0.f, 0.f, 0.f }; // transparent
+        gContext->OMSetRenderTargets(1, &gRTV, nullptr);
+        gContext->ClearRenderTargetView(gRTV, clearColor);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        gSwapChain->Present(1, 0);
 
-
-                std::cout << "width center: " << width/2 << ", height center: " << height/2 << std::endl << std::endl;
-               
-                //uintptr_t mod_base = driver::read_memory<uintptr_t>(get_module_base(pid, L"Notepad.exe"), (HANDLE)pid);
-
-                FVector2D screen = get_screen_pos(pid, width, height);
-
-
-                if (screen.X != 0 && screen.Y != 0) {
-
-                    ImGui::GetForegroundDrawList()->AddRect(
-                        ImVec2(screen.X - 30, screen.Y - 50),
-                        ImVec2(screen.X + 30, screen.Y + 50),
-                        IM_COL32(255, 0, 0, 255),
-                        0.0f,
-                        0,
-                        2.0f 
-                    );
-
-                    if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
-                        SendInputAimbot(
-                            width,
-                            height,
-                            screen.X,
-                            screen.Y
-                        );
-					}
-
-                }
-                // -----------------------
-
-                ImGui::Render();
-
-                // ================== DX11 RENDER ==================
-                float clearColor[4] = { 0.f, 0.f, 0.f, 0.f }; // transparent
-                gContext->OMSetRenderTargets(1, &gRTV, nullptr);
-                gContext->ClearRenderTargetView(gRTV, clearColor);
-                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-                gSwapChain->Present(1, 0);
-
-                Sleep(10);
-            }
-
-
-    //}
-
-
-    /*else {
-        std::cout << "Failed to attach to process.\n";
-        std::cin.get();
-
-        return 1;
+        Sleep(10);
     }
-    */
+
 
     std::cin.get();
     return 0;

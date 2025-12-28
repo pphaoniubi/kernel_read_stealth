@@ -95,7 +95,7 @@ INT64 __fastcall NtUserQueryDisplayConfig_hk(ULONG64 a1) {
 			ReadProcessMemory(info->process_id, info->target, info->buffer, info->size, &bytes_read);
 
 			info->read = bytes_read;
-			LOG("[>]Read operation at address: 0x%llx\n", info->target);
+			LOG("[+]Read operation at address: 0x%llx\n", info->target);
 			break;
 
 		default:
@@ -139,13 +139,13 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Regis
 		return -1;
 	}
 
-	auto data_ptr = ((ULONG64)win32k_base + 0x66910);
+	auto data_ptr = ((ULONG64)win32k_base + 0x66D58);
 
 
 	original_qword = (fQword)InterlockedExchangePointer((PVOID*)data_ptr, (PVOID)NtUserQueryDisplayConfig_hk);
 
 
 
-	LOG("[+]Driver Loaded, Original function : 0x % llx\n", original_qword);
+	LOG("[*]Driver Loaded, Original function : 0x % llx\n", original_qword);
 	return 0;
 }
