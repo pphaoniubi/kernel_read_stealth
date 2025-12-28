@@ -1,0 +1,10 @@
+x64/
+IAT/x64
+IAT_User/x64
+IAT/IAT.vcxproj
+IAT/IAT.vcxproj.filters
+IAT/IAT.vcxproj.user
+IAT_User/IAT_User.vcxproj
+IAT_User/IAT_User.vcxproj.filters
+IAT_User/IAT_User.vcxproj.user
+/.vs
